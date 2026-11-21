@@ -1,6 +1,6 @@
 type: object
 additionalProperties: false
-required: [ros, camera, preview]
+required: [camera, preview]
 properties:
   ros:
     type: object
@@ -11,14 +11,20 @@ properties:
         type: integer
         minimum: 0
         maximum: 232
-        default: 0
         need_restart: true
-        description: ROS_DOMAIN_ID used by the camera and its consumers.
+        description: 兼容旧版配置。存在 camera.ros_domain_id 时以新字段为准。
   camera:
     type: object
     additionalProperties: false
     required: [exposure_us]
     properties:
+      ros_domain_id:
+        type: integer
+        minimum: -1
+        maximum: 232
+        default: -1
+        need_restart: true
+        description: ROS_DOMAIN_ID used by the camera and its consumers (-1 inherits sys.ros2_default_domain_id).
       exposure_us:
         type: integer
         minimum: 0
@@ -49,7 +55,7 @@ properties:
         maximum: 1280
         default: 960
         need_restart: true
-        description: 压缩可视化宽度（像素，按 16:9 等比缩放；0 表示原生 1280×720）。原生 /camera/image_raw 始终保持 1280×720。
+        description: 预览宽度（像素）。0 使用原生 1280×720。JPEG 使用所设宽度，H.264 最小宽度为 320 并向下对齐至偶数。原始图像始终为 1280×720。
       jpeg_quality:
         type: integer
         minimum: 40

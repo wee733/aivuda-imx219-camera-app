@@ -34,6 +34,7 @@
 #include "camera_info_manager/camera_info_manager.hpp"
 #include "cuda_buffer/cuda_buffer_api.hpp"
 #include "isaac_ros_imx219/convert.hpp"
+#include "isaac_ros_imx219/frame_watchdog.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "isaac_ros_imx219/camera_node.hpp"
@@ -498,8 +499,8 @@ private:
     resources.repeating = true;
     const auto start = std::chrono::steady_clock::now();
     auto last_report = start;
-    uint64_t frames = 0, last_sensor_stamp = 0, report_frames = 0;
-    auto last_acquired = start;
+    uint64_t frames = 0, report_frames = 0;
+    FrameWatchdog watchdog(start);
     // Standalone transport holds immutable messages while DDS peers import descriptors.
     // Composition instead transfers unique ownership to rclcpp's intra-process queues.
     std::deque<std::unique_ptr<sensor_msgs::msg::Image>> retained;
@@ -512,13 +513,10 @@ private:
       const auto result = cuEGLStreamConsumerAcquireFrame(
         &resources.connection, &lease.resource, &resources.stream, timeout_us);
       if (result == CUDA_ERROR_LAUNCH_TIMEOUT) {
-        if (std::chrono::steady_clock::now() - last_acquired >= std::chrono::seconds(10)) {
-          throw std::runtime_error("No CSI frames for 10 seconds");
-        }
+        watchdog.no_new_frame(std::chrono::steady_clock::now());
         continue;
       }
       check_cu(result, "acquire EGL frame");
-      last_acquired = std::chrono::steady_clock::now();
       Argus::UniqueObj<EGLStream::MetadataContainer> metadata_container(
         EGLStream::MetadataContainer::create(resources.egl_output->getEGLDisplay(),
         resources.egl_output->getEGLStream()));
@@ -528,13 +526,9 @@ private:
         capture_metadata->getMetadata(), "ICaptureMetadata");
       const uint64_t sensor_stamp = metadata->getSensorTimestamp();
       // EGL mailbox may return the previous frame after a timeout; never republish it.
-      if (sensor_stamp == last_sensor_stamp) {
+      if (!watchdog.observe(sensor_stamp, std::chrono::steady_clock::now())) {
         continue;
       }
-      if (sensor_stamp < last_sensor_stamp || sensor_stamp == 0) {
-        throw std::runtime_error("Non-monotonic sensor timestamp");
-      }
-      last_sensor_stamp = sensor_stamp;
       // Correlate the acquisition clock with ROS system time, not frame arrival time.
       const auto before = clock_ns(sensor_clock_);
       const auto wall = clock_ns(CLOCK_REALTIME);

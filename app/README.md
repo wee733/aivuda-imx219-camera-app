@@ -10,7 +10,9 @@ Captures calibrated RGB images from the IMX219 camera on Jetson.
 | 标定 | `/camera/camera_info`，`sensor_msgs/msg/CameraInfo`，与图像使用同一采集时间戳 |
 | 坐标与队列 | `imx219_optical_frame`，best-effort，volatile，depth 3 |
 | 采集 | mode 2，1280 × 720，30 Hz，180°，室内白平衡 |
-| AivudaOS 配置 | `ros.domain_id` 默认 0，`camera.exposure_us` 默认 5000，设为 0 启用自动曝光 |
+| AivudaOS 配置 | `camera.ros_domain_id` 默认 -1（继承系统全局 `sys.ros2_default_domain_id`），`camera.exposure_us` 默认 5000，设为 0 启用自动曝光 |
+
+升级后，已有的 `ros.domain_id` 继续生效。若同时配置了两个字段，优先使用 `camera.ros_domain_id`。继承模式先读取启动环境的 `ROS_DOMAIN_ID`，旧版平台未传入时读取工作区 `config/sys.yaml` 中的 `sys.ros2_default_domain_id`，两处均未设置时使用 0。显式指定的无效域会导致启动失败并报告其值。
 
 使用机上 2026-10-22 实测的 rational_polynomial 标定。驱动和参数来自 airborne 的 `isaac_ros_imx219` 及 `calibrated_720p_5ms`。固定时间区间保留 GPU 缓冲区，便于同机消费者通过 CUDA IPC 读取。普通 CPU 图像订阅者会带来额外复制，测量采集时可订阅轻量的 CameraInfo 统计帧率。
 
@@ -18,7 +20,7 @@ Captures calibrated RGB images from the IMX219 camera on Jetson.
 
 目标为 Orin NX SM87、Isaac ROS 5.0、Lyrical、CUDA 13.2。最初的镜像在 JetPack 7.2.1 构建，本次适配设备为 L4T R39.2.2。需要原机本地 Docker 镜像 `airborne/isaac-ros:5.0-imx219-preview-20261022`、NVIDIA 容器运行时、正在运行的 nvargus-daemon、已接入的 IMX219 和当前用户的 Docker/video/render 权限。Python 3 和 PyYAML 用于读取宿主配置。机上已配置的主机 Jazzy 与容器 Lyrical 通过 DDS 互通。
 
-按仓库 `apps/package.sh airborne_isaac_camera` 打包后，上传 aivudaAppStore 并在目标 aivudaOS 安装。通过 aivudaOS 启停 app。安装钩子核对校验和、GPU 设备和镜像。运行时不需要原 airborne 检出目录。若它仍存在，会获取与旧服务相同的独占锁，以防两个管理器同时打开相机。检测 app 单独管理。
+在仓库根目录运行 `./pack.sh` 打包后，上传 aivudaAppStore 并在目标 aivudaOS 安装。安装和启动均使用包内 `isaac_runtime/`。若提示缺少启动器，请重新安装完整发布包。通过 aivudaOS 启停 app。安装钩子核对校验和、GPU 设备和镜像。运行时不需要原 airborne 检出目录。若它仍存在，会获取与旧服务相同的独占锁，以防两个管理器同时打开相机。检测 app 单独管理。
 
 ## 驱动源码与构建
 

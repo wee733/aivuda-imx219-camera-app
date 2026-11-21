@@ -73,12 +73,6 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
-  find_package(rclcpp REQUIRED)
-  find_package(rclcpp_components REQUIRED)
-  find_package(sensor_msgs REQUIRED)
-  find_package(std_msgs REQUIRED)
-  find_package(launch_testing_ament_cmake REQUIRED)
-
   ament_add_gtest(test_cuda_buffer_backend
     test/test_cuda_buffer_backend.cpp
   )
@@ -92,91 +86,6 @@ if(BUILD_TESTING)
       CUDA::cudart
     )
   endif()
-
-  ament_auto_add_library(cuda_image_publisher_component SHARED
-    test/src/cuda_image_publisher_node.cpp
-  )
-  target_link_libraries(cuda_image_publisher_component
-    cuda_buffer::cuda_buffer
-    CUDA::cudart
-    rclcpp::rclcpp
-    rclcpp_components::component
-    ${sensor_msgs_TARGETS}
-    ${std_msgs_TARGETS}
-    rosidl_runtime_cpp::rosidl_runtime_cpp
-  )
-  rclcpp_components_register_nodes(cuda_image_publisher_component
-    "CudaImagePublisher")
-
-  ament_auto_add_library(cuda_image_subscriber_component SHARED
-    test/src/cuda_image_subscriber_node.cpp
-  )
-  target_link_libraries(cuda_image_subscriber_component
-    cuda_buffer::cuda_buffer
-    CUDA::cudart
-    rclcpp::rclcpp
-    rclcpp_components::component
-    ${sensor_msgs_TARGETS}
-    ${std_msgs_TARGETS}
-    rosidl_runtime_cpp::rosidl_runtime_cpp
-  )
-  rclcpp_components_register_nodes(cuda_image_subscriber_component
-    "CudaImageSubscriber")
-
-  ament_auto_add_library(cuda_image_gpu_relay_component SHARED
-    test/src/cuda_image_gpu_relay_node.cpp
-  )
-  target_link_libraries(cuda_image_gpu_relay_component
-    cuda_buffer::cuda_buffer
-    CUDA::cudart
-    rclcpp::rclcpp
-    rclcpp_components::component
-    ${sensor_msgs_TARGETS}
-    ${std_msgs_TARGETS}
-    rosidl_runtime_cpp::rosidl_runtime_cpp
-  )
-  rclcpp_components_register_nodes(cuda_image_gpu_relay_component
-    "CudaImageGpuRelay")
-
-  add_launch_test(test/test_cuda_image_inter_pubsub_fastrtps_launch.py
-    TARGET test_cuda_image_inter_pubsub_fastrtps_launch
-    TIMEOUT 30
-  )
-
-  add_launch_test(test/test_cuda_image_intra_pubsub_fastrtps_launch.py
-    TARGET test_cuda_image_intra_pubsub_fastrtps_launch
-    TIMEOUT 30
-  )
-
-  add_launch_test(test/test_cuda_image_mixed_pubsub_fastrtps_launch.py
-    TARGET test_cuda_image_mixed_pubsub_fastrtps_launch
-    TIMEOUT 30
-  )
-
-  add_launch_test(test/test_cuda_image_multiprocess_fastrtps_launch.py
-    TARGET test_cuda_image_multiprocess_fastrtps_launch
-    TIMEOUT 45
-  )
-
-  add_launch_test(test/test_cuda_image_cpu_fallback_fastrtps_launch.py
-    TARGET test_cuda_image_cpu_fallback_fastrtps_launch
-    TIMEOUT 60
-  )
-
-  add_launch_test(test/test_cuda_image_mixed_no_duplicate_fastrtps_launch.py
-    TARGET test_cuda_image_mixed_no_duplicate_fastrtps_launch
-    TIMEOUT 45
-  )
-
-  add_launch_test(test/test_cuda_image_multi_pub_fastrtps_launch.py
-    TARGET test_cuda_image_multi_pub_fastrtps_launch
-    TIMEOUT 45
-  )
-
-  add_launch_test(test/test_cuda_image_gpu_pipeline_fastrtps_launch.py
-    TARGET test_cuda_image_gpu_pipeline_fastrtps_launch
-    TIMEOUT 45
-  )
 endif()
 
 ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)

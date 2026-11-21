@@ -15,12 +15,12 @@
 #ifndef CUDA_BUFFER_BACKEND__CUDA_BUFFER_BACKEND_HPP_
 #define CUDA_BUFFER_BACKEND__CUDA_BUFFER_BACKEND_HPP_
 
-#include <cstring>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -74,9 +74,7 @@ private:
   mutable std::shared_ptr<host_endpoint_manager::HostEndpointManager> endpoint_manager_;
   mutable std::mutex manager_mutex_;
 
-  mutable std::unordered_map<
-    host_endpoint_manager::GidKey, bool,
-    host_endpoint_manager::GidKeyHash> ipc_decision_cache_;
+  std::unordered_set<host_endpoint_manager::GidKey, host_endpoint_manager::GidKeyHash> rejected_peers_;
   mutable std::mutex ipc_cache_mutex_;
 };
 

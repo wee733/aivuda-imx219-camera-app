@@ -1,6 +1,5 @@
-ros:
-  domain_id: 0
 camera:
+  ros_domain_id: -1
   exposure_us: 5000
 preview:
   enabled: true

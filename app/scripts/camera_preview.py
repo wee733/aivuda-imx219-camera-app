@@ -7,11 +7,11 @@ is connected, and destroys the subscription after a short idle grace period so
 autonomous perception (AprilTag / QRLand) pays zero GPU->CPU copy overhead.
 """
 
-from collections import deque
+from collections import Counter, deque
 import ctypes
+from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import math
 import os
 from pathlib import Path
 import shutil
@@ -27,6 +27,8 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+
+from camera_config import preview_numbers
 
 
 class _TurboJpegEncoder:
@@ -123,9 +125,16 @@ def probe_video_capabilities(turbo_available):
         caps['h264_stream_backend'] = 'ffmpeg_nvenc'
     elif caps['v4l2_h264_ffmpeg']:
         caps['h264_stream_backend'] = 'ffmpeg_v4l2'
-    elif caps['libx264_ffmpeg']:
+    caps['h264_hardware'] = caps['h264_stream_backend'] is not None
+    if not caps['h264_hardware'] and caps['libx264_ffmpeg']:
         caps['h264_stream_backend'] = 'ffmpeg_libx264'
     return caps
+
+
+def _gst_rgb_parser(width, height, framerate):
+    # The feeder writes packed RGB24; rawvideoparse otherwise rounds rows up to 4 bytes.
+    return ['rawvideoparse', f'width={width}', f'height={height}', 'format=rgb',
+            f'plane-strides=<{width * 3}>', f'framerate={framerate}']
 
 
 class _PreviewHttpServer:
@@ -229,18 +238,18 @@ class _PreviewHttpServer:
                 if not backend:
                     self._send_json(501, {'error': 'No H.264 encoder available in this container'})
                     return
-                node.add_web_client(1)
+                w, h, fps, bitrate = node.h264_params()
+                node.add_web_client(1, (w, h))
                 proc = None
                 feeder = None
                 stop_ev = threading.Event()
                 try:
-                    w, h, fps, bitrate = node.h264_params()
+                    rate = Fraction(fps).limit_denominator(1_000_000)
+                    framerate = f'{rate.numerator}/{rate.denominator}'
                     if backend == 'gst_nvenc':
                         cmd = [
                             'gst-launch-1.0', '-q',
-                            'fdsrc', '!',
-                            f'rawvideoparse', f'width={w}', f'height={h}', 'format=rgb',
-                            f'framerate={int(round(fps))}/1', '!',
+                            'fdsrc', '!', *_gst_rgb_parser(w, h, framerate), '!',
                             'videoconvert', '!', 'video/x-raw,format=NV12', '!',
                             'nvvidconv', '!', 'video/x-raw(memory:NVMM),format=NV12', '!',
                             'nvv4l2h264enc', f'bitrate={bitrate * 1000}',
@@ -258,7 +267,7 @@ class _PreviewHttpServer:
                         cmd = [
                             'ffmpeg', '-hide_banner', '-loglevel', 'error',
                             '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{w}x{h}',
-                            '-r', f'{fps:.2f}', '-i', 'pipe:0',
+                            '-r', framerate, '-i', 'pipe:0',
                             '-c:v', vcodec, *extra, '-b:v', f'{bitrate}k',
                             '-g', str(max(10, int(round(fps)))),
                             '-pix_fmt', 'yuv420p',
@@ -314,7 +323,7 @@ class _PreviewHttpServer:
                                 pass
                     if feeder is not None:
                         feeder.join(timeout=1.0)
-                    node.add_web_client(-1)
+                    node.add_web_client(-1, (w, h))
 
         self._server = ThreadingHTTPServer(('127.0.0.1', int(port)), Handler)
         self._server.daemon_threads = True
@@ -353,11 +362,11 @@ class CameraPreviewNode(Node):
         self._turbo = _TurboJpegEncoder()
         self.capabilities = probe_video_capabilities(self._turbo.available)
 
-        self._jpeg_cond = threading.Condition()
-        self._jpeg_seq = 0
+        self._frame_cond = threading.Condition(self._lock)
+        self._frame_seq = 0
         self._latest_jpeg = None
-        self._latest_rgb = None
-        self._rgb_seq = 0
+        self._h264_sizes = Counter()
+        self._rgb_frames = {}
         self._web_clients = 0
         self._snapshot_waiters = 0
         self._last_needed_mono = 0.0
@@ -403,9 +412,14 @@ class CameraPreviewNode(Node):
     def is_shutting_down(self):
         return self._shutting_down or not rclpy.ok()
 
-    def add_web_client(self, delta):
+    def add_web_client(self, delta, size=None):
         with self._lock:
-            self._web_clients = max(0, self._web_clients + delta)
+            self._web_clients += delta
+            if size is not None:
+                self._h264_sizes[size] += delta
+                if self._h264_sizes[size] == 0:
+                    del self._h264_sizes[size]
+                    self._rgb_frames.pop(size, None)
             if self._web_clients > 0:
                 self._last_needed_mono = time.monotonic()
 
@@ -445,13 +459,18 @@ class CameraPreviewNode(Node):
             target_w = self._settings['width']
             quality = self._settings['jpeg_quality']
             snap_pending = self._snapshot_waiters > 0
+            h264_sizes = tuple(self._h264_sizes)
         min_period = 1.0 / max(target_fps, 1.0)
         if not snap_pending and (now_m - self._last_encode_mono) < min_period * 0.92:
             return
-        if msg.encoding != 'rgb8':
+        if (msg.encoding != 'rgb8' or msg.width <= 0 or msg.height <= 0
+                or msg.step < msg.width * 3):
+            return
+        data = msg.data
+        if len(data) != msg.height * msg.step:
             return
         t0 = time.perf_counter()
-        rows = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+        rows = np.frombuffer(data, dtype=np.uint8).reshape(msg.height, msg.step)
         rgb = rows[:, :msg.width * 3].reshape(msg.height, msg.width, 3)
         if target_w and 0 < target_w < msg.width:
             target_h = max(2, int(round(msg.height * (target_w / msg.width))) & ~1)
@@ -479,43 +498,48 @@ class CameraPreviewNode(Node):
             cmsg.data = jpg
             self.compressed_pub.publish(cmsg)
 
-        with self._lock:
+        # Connections retain their negotiated size across live settings changes.
+        rgb_frames = {}
+        for size in h264_sizes:
+            if size == (rgb_out.shape[1], rgb_out.shape[0]):
+                rgb_frames[size] = rgb_out
+            elif size == (msg.width, msg.height):
+                rgb_frames[size] = rgb
+            else:
+                rgb_frames[size] = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
+        with self._frame_cond:
             self._enc_times.append(now_m)
             self._enc_bytes.append(len(jpg))
             self._enc_ms.append(enc_ms)
-        with self._jpeg_cond:
-            self._jpeg_seq += 1
+            self._frame_seq += 1
             self._latest_jpeg = jpg
-            self._rgb_seq += 1
-            self._latest_rgb = rgb_out
-            self._jpeg_cond.notify_all()
+            self._rgb_frames = {size: frame for size, frame in rgb_frames.items()
+                                if size in self._h264_sizes}
+            self._frame_cond.notify_all()
 
     def wait_for_jpeg(self, last_seq, timeout=1.5):
-        with self._jpeg_cond:
-            self._jpeg_cond.wait_for(
-                lambda: self._jpeg_seq > last_seq or self.is_shutting_down(), timeout=timeout)
-            if self._jpeg_seq > last_seq:
-                return self._jpeg_seq, self._latest_jpeg
+        with self._frame_cond:
+            self._frame_cond.wait_for(
+                lambda: self._frame_seq > last_seq or self.is_shutting_down(), timeout=timeout)
+            if self._frame_seq > last_seq:
+                return self._frame_seq, self._latest_jpeg
             return last_seq, None
 
     def wait_for_rgb(self, last_seq, width, height, timeout=1.0):
-        with self._jpeg_cond:
-            self._jpeg_cond.wait_for(
-                lambda: self._rgb_seq > last_seq or self.is_shutting_down(), timeout=timeout)
-            if self._rgb_seq > last_seq and self._latest_rgb is not None:
-                rgb = self._latest_rgb
-                seq = self._rgb_seq
-            else:
-                return last_seq, None
-        if rgb.shape[1] != width or rgb.shape[0] != height:
-            rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
-        return seq, rgb
+        size = (width, height)
+        with self._frame_cond:
+            self._frame_cond.wait_for(
+                lambda: (self._frame_seq > last_seq and size in self._rgb_frames)
+                or self.is_shutting_down(), timeout=timeout)
+            if self._frame_seq > last_seq and size in self._rgb_frames:
+                return self._frame_seq, self._rgb_frames[size]
+            return last_seq, None
 
     def capture_snapshot(self, timeout=3.0):
         with self._lock:
             self._snapshot_waiters += 1
             self._last_needed_mono = time.monotonic()
-            start_seq = self._jpeg_seq
+            start_seq = self._frame_seq
         try:
             _, jpg = self.wait_for_jpeg(start_seq, timeout=timeout)
             return jpg
@@ -528,35 +552,14 @@ class CameraPreviewNode(Node):
             src_w = self._cam_info['width'] or 1280
             src_h = self._cam_info['height'] or 720
             w = self._settings['width'] or src_w
-            w = min(w, src_w) & ~1
+            w = min(max(320, w), src_w) & ~1
             h = max(2, int(round(src_h * (w / src_w))) & ~1)
             return w, h, self._settings['fps'], self._settings['h264_bitrate_kbps']
 
     def update_settings(self, data):
         with self._lock:
-            next_s = dict(self._settings)
-            if 'fps' in data:
-                fps = float(data['fps'])
-                if not math.isfinite(fps) or not 1.0 <= fps <= 30.0:
-                    raise ValueError('fps must be in [1, 30]')
-                next_s['fps'] = fps
-            if 'width' in data:
-                w = int(data['width'])
-                if w != 0 and not 320 <= w <= 1280:
-                    raise ValueError('width must be 0 (native) or in [320, 1280]')
-                next_s['width'] = w
-            if 'jpeg_quality' in data:
-                q = int(data['jpeg_quality'])
-                if not 40 <= q <= 95:
-                    raise ValueError('jpeg_quality must be in [40, 95]')
-                next_s['jpeg_quality'] = q
-            if 'h264_bitrate_kbps' in data:
-                br = int(data['h264_bitrate_kbps'])
-                if not 500 <= br <= 12000:
-                    raise ValueError('h264_bitrate_kbps must be in [500, 12000]')
-                next_s['h264_bitrate_kbps'] = br
-            self._settings = next_s
-            return dict(next_s)
+            self._settings.update(preview_numbers(data, live_update=True))
+            return dict(self._settings)
 
     def status_payload(self):
         now_m = time.monotonic()
@@ -599,8 +602,8 @@ class CameraPreviewNode(Node):
 
     def destroy_node(self):
         self._shutting_down = True
-        with self._jpeg_cond:
-            self._jpeg_cond.notify_all()
+        with self._frame_cond:
+            self._frame_cond.notify_all()
         if self._http is not None:
             self._http.close()
         self._turbo.close()

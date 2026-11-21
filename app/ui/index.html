@@ -139,7 +139,7 @@
       <div class="btn-row" style="margin-top:12px">
         <button class="btn" id="toggleBtn">暂停预览（释放零拷贝零开销）</button>
         <a class="btn secondary" id="snapLink" href="../api/snapshot.jpg" download="imx219_snapshot.jpg">下载高清抓拍 JPG</a>
-        <button class="btn secondary" id="modeBtn" style="display:none">切换 H.264 硬件流</button>
+        <button class="btn secondary" id="modeBtn" style="display:none">切换 H.264 流</button>
       </div>
     </section>
 
@@ -168,7 +168,7 @@
           <span>JPEG 画质：<strong id="qVal">85</strong></span>
           <input id="qRange" type="range" min="40" max="95" step="1" value="85" />
         </label>
-        <button class="btn" id="applyBtn">应用编码设置</button>
+        <button class="btn" id="applyBtn" disabled>应用编码设置</button>
         <div class="msg" id="msg"></div>
       </div>
 
@@ -181,19 +181,27 @@
     const API = '../api';
     const $ = (id) => document.getElementById(id);
     let playing = true;
-    let mode = 'mjpeg';
+    let mode = null;
     let h264Supported = false;
-    let initForm = false;
 
     function startStream() {
       const stage = $('stage');
+      const previous = stage.querySelector('video, img');
+      if (previous) {
+        previous.removeAttribute('src');
+        if (previous.tagName === 'VIDEO') previous.load();
+      }
       if (!playing) {
         stage.innerHTML = '<div class="paused-banner">预览已暂停（后端 2 秒后自动退订 /camera/image_raw，CPU/GPU 额外开销归零）</div>';
         return;
       }
-      if (mode === 'h264' && h264Supported) {
+      if (mode === 'h264') {
         stage.innerHTML = `<video autoplay muted playsinline controls src="${API}/stream.mp4?t=${Date.now()}"></video>`;
-      } else {
+        const video = stage.querySelector('video');
+        video.addEventListener('error', () => {
+          if (stage.contains(video)) setMode('mjpeg');
+        }, { once: true });
+      } else if (mode === 'mjpeg') {
         stage.innerHTML = `<img id="mjpegView" alt="IMX219 Live Preview" src="${API}/stream.mjpg?t=${Date.now()}" />`;
       }
     }
@@ -204,10 +212,14 @@
       startStream();
     });
 
-    $('modeBtn').addEventListener('click', () => {
-      mode = mode === 'mjpeg' ? 'h264' : 'mjpeg';
-      $('modeBtn').textContent = mode === 'mjpeg' ? '切换 H.264 硬件流' : '切换低延迟 MJPEG';
+    function setMode(nextMode) {
+      mode = nextMode;
+      $('modeBtn').textContent = mode === 'mjpeg' ? '切换 H.264 流' : '切换低延迟 MJPEG';
       startStream();
+    }
+
+    $('modeBtn').addEventListener('click', () => {
+      if (h264Supported) setMode(mode === 'mjpeg' ? 'h264' : 'mjpeg');
     });
 
     $('qRange').addEventListener('input', () => {
@@ -234,10 +246,24 @@
       }
     });
 
+    function selectValue(select, value, unit) {
+      const text = String(value);
+      if (!Array.from(select.options).some(option => option.value === text)) {
+        select.add(new Option(`${text} ${unit}`, text));
+      }
+      select.value = text;
+    }
+
     function renderStatus(s) {
       const caps = s.capabilities || {};
-      h264Supported = Boolean(caps.h264_stream_backend);
+      const backend = caps.h264_stream_backend;
+      h264Supported = Boolean(backend);
       $('modeBtn').style.display = h264Supported ? 'inline-flex' : 'none';
+      if (mode === null && s.settings) {
+        setMode(s.settings.codec !== 'jpeg' && caps.h264_hardware ? 'h264' : 'mjpeg');
+      } else if (mode === 'h264' && !h264Supported) {
+        setMode('mjpeg');
+      }
       const jpegEnc = caps.turbojpeg ? 'TurboJPEG SIMD' : 'OpenCV JPEG';
       const h264Enc = caps.h264_stream_backend || '未安装 NVENC/FFmpeg';
       $('chips').innerHTML = `
@@ -257,12 +283,12 @@
         capabilities: caps,
       }, null, 2);
 
-      if (!initForm && s.settings) {
-        $('widthSel').value = String(s.settings.width ?? 960);
-        $('fpsSel').value = String(Math.round(s.settings.fps ?? 15));
+      if ($('applyBtn').disabled && s.settings) {
+        selectValue($('widthSel'), s.settings.width ?? 960, 'px');
+        selectValue($('fpsSel'), s.settings.fps ?? 15, 'FPS');
         $('qRange').value = String(s.settings.jpeg_quality ?? 85);
         $('qVal').textContent = $('qRange').value;
-        initForm = true;
+        $('applyBtn').disabled = false;
       }
     }
 
@@ -276,7 +302,6 @@
       }
     }
 
-    startStream();
     poll();
     setInterval(poll, 1000);
   </script>
