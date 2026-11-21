@@ -1,0 +1,62 @@
+# Spectacular AI 1.53.2; AprilGrid 6x6 tag36h11, tagSize=0.088 m, spacing=0.3.
+# IMX219 sensor mode 2; published image 1280x720, rotation 180 degrees.
+# Camera-only calibration. No IMU-to-camera extrinsics were measured.
+# Report passed: coverage 0.9777777778, mean reprojection error 0.2179163746 px.
+image_width: 1280
+image_height: 720
+camera_name: imx219_mode2_1280x720_rot180
+camera_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 981.7509932911579
+  - 0.0
+  - 642.119307820969
+  - 0.0
+  - 981.8908049277894
+  - 348.51091955608894
+  - 0.0
+  - 0.0
+  - 1.0
+distortion_model: rational_polynomial
+distortion_coefficients:
+  rows: 1
+  cols: 8
+  data:
+  - 0.7907685308796657
+  - 5.2123618715828135
+  - -0.001303320909502715
+  - 0.0015879848785077622
+  - -4.684892690581042
+  - 0.881923012981887
+  - 5.234246016016708
+  - -4.6901903274630685
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+projection_matrix:
+  rows: 3
+  cols: 4
+  data:
+  - 981.7509932911579
+  - 0.0
+  - 642.119307820969
+  - 0.0
+  - 0.0
+  - 981.8908049277894
+  - 348.51091955608894
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0

@@ -1,0 +1,18 @@
+/camera/imx219:
+  ros__parameters:
+    sensor_id: 0
+    sensor_mode: 2
+    width: 1280
+    height: 720
+    rotation: 180
+    fps: 30.0
+    camera_info_url: file:///app/config/imx219_mode2_1280x720_rot180.yaml
+    frame_id: imx219_optical_frame
+    timestamp_clock: monotonic
+    qos_depth: 3
+    ipc_retention_ms: 1000
+    awb_mode: indoor
+    exposure_compensation_ev: -0.7
+    color_gain_r: 1.1772151898734178
+    color_gain_g: 1.0
+    color_gain_b: 0.8691588785046729

@@ -1,0 +1,10 @@
+/dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.deps/
+.venv/
+/app/ros_ws/build/
+/app/ros_ws/install/
+/app/ros_ws/log/
+/app/runtime/

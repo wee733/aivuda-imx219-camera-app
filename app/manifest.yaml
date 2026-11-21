@@ -1,0 +1,13 @@
+app_id: airborne_isaac_camera
+name: IMX219 Isaac ROS Camera
+description: Captures zero-copy CUDA RGB images for Isaac ROS and serves on-demand compressed ROS/Web visualization streams.
+version: 1.1.0
+run:
+  entrypoint: ./start.sh
+  args: []
+icon: icon.svg
+ui_index_path: ./ui/index.html
+caddyfile_config_path: ./config/airborne_isaac_camera.caddy
+pre_install: ./scripts/pre_install.sh
+default_config_path: config/default_config.yaml
+config_schema_path: config/config_schema.yaml

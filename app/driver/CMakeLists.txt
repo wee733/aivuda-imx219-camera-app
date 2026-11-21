@@ -1,0 +1,45 @@
+cmake_minimum_required(VERSION 3.22)
+project(isaac_ros_imx219 LANGUAGES CXX CUDA)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_ARCHITECTURES 87)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(camera_info_manager REQUIRED)
+find_package(cuda_buffer REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+find_package(Threads REQUIRED)
+find_path(ARGUS_INCLUDE Argus/Argus.h HINTS /usr/src/jetson_multimedia_api/argus/include REQUIRED)
+find_library(ARGUS_LIBRARY nvargus_socketclient HINTS /usr/lib/aarch64-linux-gnu/nvidia REQUIRED)
+find_library(EGL_LIBRARY EGL REQUIRED)
+
+add_library(imx219_convert STATIC src/convert.cu)
+target_include_directories(imx219_convert PUBLIC include)
+target_link_libraries(imx219_convert PUBLIC CUDA::cudart CUDA::cuda_driver)
+set_target_properties(imx219_convert PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(imx219_component SHARED src/imx219_node.cpp)
+target_include_directories(imx219_component PRIVATE ${ARGUS_INCLUDE})
+target_link_libraries(imx219_component
+  imx219_convert ${ARGUS_LIBRARY} ${EGL_LIBRARY} Threads::Threads
+  ${sensor_msgs_TARGETS} ${rcl_interfaces_TARGETS}
+  sensor_msgs::sensor_msgs_library rclcpp::rclcpp rclcpp_components::component
+  camera_info_manager::camera_info_manager cuda_buffer::cuda_buffer)
+target_compile_options(imx219_component PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(imx219_node src/main.cpp)
+target_include_directories(imx219_node PRIVATE include)
+target_link_libraries(imx219_node PRIVATE imx219_component rclcpp::rclcpp)
+install(TARGETS imx219_component LIBRARY DESTINATION lib)
+install(TARGETS imx219_node RUNTIME DESTINATION bin)
+
+include(CTest)
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_convert test/test_convert.cpp)
+  target_link_libraries(test_convert imx219_convert)
+endif()

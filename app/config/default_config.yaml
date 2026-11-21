@@ -1,0 +1,11 @@
+ros:
+  domain_id: 0
+camera:
+  exposure_us: 5000
+preview:
+  enabled: true
+  fps: 15.0
+  width: 960
+  jpeg_quality: 85
+  codec: auto
+  h264_bitrate_kbps: 3000

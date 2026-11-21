@@ -1,0 +1,5 @@
+@camera_api path /airborne_isaac_camera/api /airborne_isaac_camera/api/*
+handle @camera_api {
+  uri strip_prefix /airborne_isaac_camera/api
+  reverse_proxy 127.0.0.1:19311
+}

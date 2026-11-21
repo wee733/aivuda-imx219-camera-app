@@ -1,0 +1,72 @@
+type: object
+additionalProperties: false
+required: [ros, camera, preview]
+properties:
+  ros:
+    type: object
+    additionalProperties: false
+    required: [domain_id]
+    properties:
+      domain_id:
+        type: integer
+        minimum: 0
+        maximum: 232
+        default: 0
+        need_restart: true
+        description: ROS_DOMAIN_ID used by the camera and its consumers.
+  camera:
+    type: object
+    additionalProperties: false
+    required: [exposure_us]
+    properties:
+      exposure_us:
+        type: integer
+        minimum: 0
+        maximum: 33333
+        default: 5000
+        need_restart: true
+        description: Fixed exposure in microseconds (0 enables Argus auto-exposure). Default 5 ms from the calibrated airborne profile.
+  preview:
+    type: object
+    additionalProperties: false
+    required: [enabled, fps, width, jpeg_quality, codec, h264_bitrate_kbps]
+    properties:
+      enabled:
+        type: boolean
+        default: true
+        need_restart: true
+        description: 启用按需可视化压缩旁路（发布标准 /camera/image_raw/compressed 与内置 Web 预览页；无人订阅或观看时自动退订零开销）。
+      fps:
+        type: number
+        minimum: 1
+        maximum: 30
+        default: 15.0
+        need_restart: true
+        description: 压缩流目标帧率（Hz），也可在内置 Web UI 中实时调节。
+      width:
+        type: integer
+        minimum: 0
+        maximum: 1280
+        default: 960
+        need_restart: true
+        description: 压缩可视化宽度（像素，按 16:9 等比缩放；0 表示原生 1280×720）。原生 /camera/image_raw 始终保持 1280×720。
+      jpeg_quality:
+        type: integer
+        minimum: 40
+        maximum: 95
+        default: 85
+        need_restart: true
+        description: JPEG 编码画质（40-95），建议 80-88 兼顾清晰度与无线带宽。
+      codec:
+        type: string
+        enum: [auto, nvenc_h264, jpeg]
+        default: auto
+        need_restart: true
+        description: Web 预览编码策略（auto 自动探测 Jetson 硬件 NVENC H.264 / TurboJPEG；ROS /camera/image_raw/compressed 始终按标准 JPEG 发布以兼容 Zenoh/Foxglove/RViz）。
+      h264_bitrate_kbps:
+        type: integer
+        minimum: 500
+        maximum: 12000
+        default: 3000
+        need_restart: true
+        description: 启用 H.264 硬件编码时的目标码率（kbps）。
