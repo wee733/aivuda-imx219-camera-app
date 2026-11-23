@@ -83,4 +83,33 @@ void convert_rgb(
   yuv_to_rgb<<<dim3((w + 31) / 32, (h + 7) / 8), dim3(32, 8), 0, stream>>>(in, out, w, h, step);
 }
 
+// Sample the ISP planes directly; rotation and downscaling write into NVENC's DMA-BUF.
+__global__ void write_nv12(Yuv420 in, unsigned sw, unsigned sh, unsigned w, unsigned h,
+  uint8_t * out_y, unsigned y_pitch, uint8_t * out_uv, unsigned uv_pitch)
+{
+  const unsigned x = blockIdx.x * blockDim.x + threadIdx.x;
+  const unsigned y = blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= w || y >= h) {return;}
+  const unsigned sx = (in.rotate_180 ? w - 1 - x : x) * sw / w;
+  const unsigned sy = (in.rotate_180 ? h - 1 - y : y) * sh / h;
+  out_y[y * y_pitch + x] = surf2Dread<unsigned char>(in.y, sx, sy);
+  if ((x & 1) || (y & 1)) {return;}
+  uchar2 uv;
+  if (in.semiplanar) {
+    uv = surf2Dread<uchar2>(in.u, (sx / 2) * sizeof(uchar2), sy / 2);
+  } else {
+    uv.x = surf2Dread<unsigned char>(in.u, sx / 2, sy / 2);
+    uv.y = surf2Dread<unsigned char>(in.v, sx / 2, sy / 2);
+  }
+  uint8_t * dest = out_uv + (y / 2) * uv_pitch + x;
+  dest[0] = in.swap_uv ? uv.y : uv.x;
+  dest[1] = in.swap_uv ? uv.x : uv.y;
+}
+
+void convert_nv12(const Yuv420 & in, unsigned sw, unsigned sh, unsigned w, unsigned h,
+  uint8_t * y, unsigned yp, uint8_t * uv, unsigned uvp, cudaStream_t stream)
+{
+  write_nv12<<<dim3((w + 31) / 32, (h + 7) / 8), dim3(32, 8), 0, stream>>>(
+    in, sw, sh, w, h, y, yp, uv, uvp);
+}
 }  // namespace imx219

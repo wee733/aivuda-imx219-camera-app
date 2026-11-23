@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(foxglove_msgs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(cuda_buffer REQUIRED)
 find_package(CUDAToolkit REQUIRED)
@@ -23,10 +24,21 @@ target_include_directories(imx219_convert PUBLIC include)
 target_link_libraries(imx219_convert PUBLIC CUDA::cudart CUDA::cuda_driver)
 set_target_properties(imx219_convert PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(imx219_component SHARED src/imx219_node.cpp)
+set(MULTIMEDIA_ROOT /usr/src/jetson_multimedia_api CACHE PATH "Jetson Multimedia API root")
+set(mmapi_sources)
+foreach(source NvVideoEncoder NvV4l2Element NvV4l2ElementPlane NvElement NvElementProfiler NvBuffer NvLogging)
+  list(APPEND mmapi_sources "${MULTIMEDIA_ROOT}/samples/common/classes/${source}.cpp")
+endforeach()
+add_library(imx219_mmapi STATIC ${mmapi_sources})
+set_target_properties(imx219_mmapi PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(imx219_mmapi SYSTEM PUBLIC ${MULTIMEDIA_ROOT}/include)
+find_library(NVBUF_LIBRARY nvbufsurface HINTS /usr/lib/aarch64-linux-gnu/nvidia REQUIRED)
+find_library(V4L_LIBRARY NAMES libv4l2.so.0 HINTS /usr/lib/aarch64-linux-gnu/nvidia REQUIRED)
+target_link_libraries(imx219_mmapi PUBLIC ${NVBUF_LIBRARY} ${V4L_LIBRARY} CUDA::cuda_driver CUDA::cudart)
+add_library(imx219_component SHARED src/imx219_node.cpp src/native_encoder.cpp)
 target_include_directories(imx219_component PRIVATE ${ARGUS_INCLUDE})
 target_link_libraries(imx219_component
-  imx219_convert ${ARGUS_LIBRARY} ${EGL_LIBRARY} Threads::Threads
+  imx219_convert imx219_mmapi ${foxglove_msgs_TARGETS} ${ARGUS_LIBRARY} ${EGL_LIBRARY} Threads::Threads
   ${sensor_msgs_TARGETS} ${rcl_interfaces_TARGETS}
   sensor_msgs::sensor_msgs_library rclcpp::rclcpp rclcpp_components::component
   camera_info_manager::camera_info_manager cuda_buffer::cuda_buffer)
@@ -36,6 +48,13 @@ target_include_directories(imx219_node PRIVATE include)
 target_link_libraries(imx219_node PRIVATE imx219_component rclcpp::rclcpp)
 install(TARGETS imx219_component LIBRARY DESTINATION lib)
 install(TARGETS imx219_node RUNTIME DESTINATION bin)
+
+# Publish the component resource in the app prefix for ros2 launch.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/isaac_ros_imx219" "imx219::Imx219Node;lib/libimx219_component.so\n")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/isaac_ros_imx219"
+  DESTINATION share/ament_index/resource_index/rclcpp_components)
+install(FILES package.xml DESTINATION share/isaac_ros_imx219)
+install(FILES package.xml DESTINATION share/ament_index/resource_index/packages RENAME isaac_ros_imx219)
 
 include(CTest)
 if(BUILD_TESTING)

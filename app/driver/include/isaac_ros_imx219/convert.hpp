@@ -33,6 +33,9 @@ struct Yuv420
 void convert_rgb(
   const Yuv420 & input, uint8_t * output, unsigned width,
   unsigned height, unsigned step, cudaStream_t stream);
+void convert_nv12(const Yuv420 & input, unsigned source_width, unsigned source_height,
+  unsigned width, unsigned height, uint8_t * y, unsigned y_pitch,
+  uint8_t * uv, unsigned uv_pitch, cudaStream_t stream);
 }  // namespace imx219
 
 #endif  // ISAAC_ROS_IMX219__CONVERT_HPP_

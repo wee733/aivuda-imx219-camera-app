@@ -36,13 +36,32 @@
 #include "isaac_ros_imx219/convert.hpp"
 #include "isaac_ros_imx219/frame_watchdog.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/serialization.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "isaac_ros_imx219/camera_node.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
+#include "foxglove_msgs/msg/compressed_video.hpp"
+#include "isaac_ros_imx219/native_encoder.hpp"
 
 namespace imx219
 {
+
+// Keep public compressed streams on the standard DDS writer. On Lyrical, a
+// departed buffer-aware reader can otherwise leave a Jazzy bridge on a silent
+// channel. Encoded packets are already CPU bytes on both encoder paths.
+template<typename Message>
+void publish_encoded_packet(rclcpp::Publisher<Message> & publisher, const Message & message)
+{
+  rclcpp::Serialization<Message> serializer;
+  rclcpp::SerializedMessage packet;
+  serializer.serialize_message(&message, &packet);
+  if (packet.size() <= message.data.size() || packet.size() > packet.capacity()) {
+    throw std::runtime_error("Invalid CDR size for compressed video packet");
+  }
+  publisher.publish(packet);
+}
 
 void check_cu(CUresult code, const char * operation)
 {
@@ -280,7 +299,18 @@ public:
     if (retention_ms < 0 || retention_ms > 5000) {
       throw std::invalid_argument("ipc_retention_ms must be in [0, 5000]");
     }
-    intra_process_ = options.use_intra_process_comms();
+    stream_mode_ = parameter<std::string>("stream.mode", "off");
+    const bool publish_compressed_image = parameter<bool>("stream.publish_compressed_image", false);
+    stream_fps_ = parameter<int>("stream.fps", 15);
+    stream_width_ = parameter<int>("stream.width", 960);
+    bitrate_ = parameter<int>("stream.bitrate_kbps", 1500);
+    interval_ = parameter<int>("stream.iframe_interval", 15);
+    if ((stream_mode_ != "off" && stream_mode_ != "native_nvenc" && stream_mode_ != "isaac_ros_h264") ||
+      stream_fps_ < 1 || stream_fps_ > 30 || bitrate_ < 300 || bitrate_ > 8000 ||
+      interval_ < 1 || interval_ > 120 ||
+      (stream_width_ != 640 && stream_width_ != 960 && stream_width_ != 1280)) {
+      throw std::invalid_argument("Invalid stream settings");
+    }
     max_exposure_us_ = parameter<int>("max_exposure_us", 0);
     exposure_us_ = parameter<int>("exposure_us", 0);
     if (exposure_us_ < 0 || (exposure_us_ > 0 && max_exposure_us_ > 0)) {
@@ -342,7 +372,7 @@ public:
       throw std::invalid_argument("timestamp_clock must be monotonic or monotonic_raw");
     }
     retention_frames_ = static_cast<size_t>(std::ceil(fps_ * retention_ms / 1000.0)) + 1;
-    if (!intra_process_ && retention_frames_ * width_ * height_ * 3ULL > 512ULL * 1024 * 1024) {
+    if (retention_frames_ * width_ * height_ * 3ULL > 512ULL * 1024 * 1024) {
       throw std::invalid_argument("IPC retention exceeds 512 MiB; reduce ipc_retention_ms");
     }
     camera_info_ = std::make_unique<camera_info_manager::CameraInfoManager>(this, camera_name);
@@ -368,7 +398,37 @@ public:
     CUdevice device{};
     check_cu(cuDeviceGet(&device, 0), "CUDA device 0; check container GPU access");
     const auto qos = rclcpp::SensorDataQoS().keep_last(qos_depth);
-    image_pub_ = create_publisher<sensor_msgs::msg::Image>("image_raw", qos);
+    // External Isaac ROS consumers need the original allocation alive while importing CUDA IPC.
+    rclcpp::PublisherOptions external;
+    external.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
+    image_pub_ = create_publisher<sensor_msgs::msg::Image>("image_raw", qos, external);
+    if (stream_mode_ != "off") {
+      video_pub_ = create_publisher<Video>("video/h264", rclcpp::SensorDataQoS(), external);
+    }
+    if (stream_mode_ == "isaac_ros_h264") {
+      encoder_input_ = create_publisher<sensor_msgs::msg::Image>("internal/encode_input", rclcpp::QoS(2).reliable());
+      if (publish_compressed_image) {
+        compressed_pub_ = create_publisher<Compressed>("image_compressed", rclcpp::SensorDataQoS(), external);
+      }
+      encoded_sub_ = create_subscription<Compressed>("internal/encoded", rclcpp::SensorDataQoS(),
+        [this](Compressed::UniquePtr encoded) {
+          if (encoded->data.get_backend_type() == "cuda") {
+            // Both public topics export standard CDR containing only encoded bytes.
+            encoded->data = rosidl::Buffer<uint8_t>(encoded->data.to_vector());
+          }
+          if (compressed_pub_ && compressed_pub_->get_subscription_count()) {
+            publish_encoded_packet(*compressed_pub_, *encoded);
+          }
+          if (video_pub_->get_subscription_count()) {
+            Video msg;
+            msg.timestamp = encoded->header.stamp;
+            msg.frame_id = encoded->header.frame_id;
+            msg.format = "h264";
+            msg.data = std::move(encoded->data);
+            publish_encoded_packet(*video_pub_, msg);
+          }
+        });
+    }
     info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>("camera_info", qos);
     shutdown_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() {
           if (done_) {
@@ -501,9 +561,11 @@ private:
     auto last_report = start;
     uint64_t frames = 0, report_frames = 0;
     FrameWatchdog watchdog(start);
-    // Standalone transport holds immutable messages while DDS peers import descriptors.
-    // Composition instead transfers unique ownership to rclcpp's intra-process queues.
-    std::deque<std::unique_ptr<sensor_msgs::msg::Image>> retained;
+    std::deque<std::shared_ptr<sensor_msgs::msg::Image>> retained;
+    std::unique_ptr<NativeEncoder> native;
+    auto idle_until = start;
+    auto retry_after = start;
+    uint64_t next_input = 0;
     int64_t previous_ros_stamp = 0;
     while (!stopping_ && rclcpp::ok(get_node_base_interface()->get_context())) {
       FrameLease lease(resources);
@@ -566,7 +628,7 @@ private:
       info.height = frame.height;
       info.header.frame_id = frame_id_;
       info.header.stamp = rclcpp::Time(ros_stamp, RCL_SYSTEM_TIME);
-      auto image = std::make_unique<sensor_msgs::msg::Image>();
+      auto image = std::make_shared<sensor_msgs::msg::Image>();
       image->header = info.header;
       image->width = frame.width;
       image->height = frame.height;
@@ -588,16 +650,67 @@ private:
           image->data.get_backend_type().c_str(), age_ns / 1e6,
           metadata->getSensorExposureTime() / 1e6, rotation_);
       }
-      if (intra_process_) {
-        image_pub_->publish(std::move(image));
-      } else {
-        image_pub_->publish(*image);
-        retained.push_back(std::move(image));
-        if (retained.size() > retention_frames_) {
-          retained.pop_front();
+      image_pub_->publish(*image);
+      info_pub_->publish(info);
+      retained.push_back(image);
+      if (retained.size() > retention_frames_) {retained.pop_front();}
+
+      if (video_pub_) {
+        const auto now = std::chrono::steady_clock::now();
+        const bool demand = video_pub_->get_subscription_count() ||
+          (compressed_pub_ && compressed_pub_->get_subscription_count());
+        if (!demand) {
+          next_input = 0;
+          if (native && now >= idle_until) {
+            native.reset();
+            RCLCPP_INFO(get_logger(), "Released idle native NVENC session");
+          }
+        } else if (sensor_stamp >= next_input && now >= retry_after) {
+          idle_until = now + std::chrono::seconds(2);
+          // Advance a sensor-clock deadline to avoid halving fps due to clock jitter.
+          const uint64_t period = 1000000000ULL / stream_fps_;
+          next_input = next_input && sensor_stamp - next_input < period ?
+            next_input + period : sensor_stamp + period;
+          if (encoder_input_) {
+            // Share immutable RGB storage and its recorded producer event. The view owns a
+            // reference to the same original message until the official encoder releases it.
+            auto branch = std::make_unique<sensor_msgs::msg::Image>();
+            branch->header = image->header;
+            branch->width = image->width;
+            branch->height = image->height;
+            branch->step = image->step;
+            branch->encoding = image->encoding;
+            auto & src = cuda_buffer_backend::detail::cuda_impl_of(image->data)->get_cuda_buffer();
+            cuda_buffer_backend::CudaBuffer view(src.get_device_ptr(), src.size(), src.get_device_id(),
+              [image](uint8_t *) {});
+            view.set_write_event(src.get_write_event(), false);
+            branch->data = rosidl::Buffer<uint8_t>(std::make_unique<cuda_buffer_backend::CudaBufferImpl<uint8_t>>(
+                std::move(view), src.size()));
+            encoder_input_->publish(std::move(branch));
+          } else {
+            try {
+              if (!native) {
+                native = std::make_unique<NativeEncoder>(stream_width_,
+                  (stream_width_ * height_ / width_) & ~1, stream_fps_, bitrate_, interval_,
+                  [this](int64_t stamp, const uint8_t * data, size_t length) {
+                    Video msg;
+                    msg.timestamp = rclcpp::Time(stamp, RCL_SYSTEM_TIME);
+                    msg.frame_id = frame_id_;
+                    msg.format = "h264";
+                    msg.data.assign(data, data + length);
+                    publish_encoded_packet(*video_pub_, msg);
+                  });
+                RCLCPP_INFO(get_logger(), "Opened native NVENC session");
+              }
+              native->submit(layout, width_, height_, ros_stamp, resources.stream);
+            } catch (const std::exception & e) {
+              native.reset();
+              retry_after = now + std::chrono::seconds(2);
+              RCLCPP_ERROR(get_logger(), "Video stream failed: %s", e.what());
+            }
+          }
         }
       }
-      info_pub_->publish(info);
       ++frames;
       const auto now = std::chrono::steady_clock::now();
       const auto seconds = std::chrono::duration<double>(now - last_report).count();
@@ -621,7 +734,14 @@ private:
   double fps_{};
   double exposure_ev_{}, gain_r_{}, gain_g_{}, gain_b_{};
   std::string awb_mode_;
-  bool intra_process_{};
+  using Video = foxglove_msgs::msg::CompressedVideo;
+  using Compressed = sensor_msgs::msg::CompressedImage;
+  std::string stream_mode_;
+  int stream_width_{}, stream_fps_{}, bitrate_{}, interval_{};
+  rclcpp::Publisher<Video>::SharedPtr video_pub_;
+  rclcpp::Publisher<Compressed>::SharedPtr compressed_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr encoder_input_;
+  rclcpp::Subscription<Compressed>::SharedPtr encoded_sub_;
   size_t retention_frames_{};
   std::string frame_id_;
   clockid_t sensor_clock_{};

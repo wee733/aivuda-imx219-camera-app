@@ -126,7 +126,8 @@ def main():
             '--entrypoint', '/bin/bash']
     for name in ('video', 'render'):
         args.extend(['--group-add', str(grp.getgrnam(name).gr_gid)])
-    for pattern in DEVICE_PATTERNS:
+    patterns = DEVICE_PATTERNS + (('v4l2-nvenc', 'nvhost-msenc', 'nvhost-multimedia-gpu') if mode == 'camera' else ())
+    for pattern in patterns:
         for path in sorted(Path('/dev').glob(pattern)):
             if path.is_char_device():
                 args.extend(['--device', str(path)])

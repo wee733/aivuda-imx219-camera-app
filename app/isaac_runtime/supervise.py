@@ -32,7 +32,9 @@ def main():
     finally:
         # Always terminate any components left behind by a launch parent.
         try:
-            os.killpg(child.pid, signal.SIGINT)
+            # ros2 launch forwards SIGINT to its component container. Signalling the
+            # entire group here delivers it twice and can interrupt encoder teardown.
+            child.send_signal(signal.SIGINT)
             child.wait(timeout=5)
         except (ProcessLookupError, subprocess.TimeoutExpired):
             pass

@@ -1,22 +1,16 @@
+x-ros-domain-migration:
+  section: camera
 type: object
 additionalProperties: false
-required: [camera, preview]
+required:
+- camera
+- stream
 properties:
-  ros:
-    type: object
-    additionalProperties: false
-    required: [domain_id]
-    properties:
-      domain_id:
-        type: integer
-        minimum: 0
-        maximum: 232
-        need_restart: true
-        description: 兼容旧版配置。存在 camera.ros_domain_id 时以新字段为准。
   camera:
     type: object
     additionalProperties: false
-    required: [exposure_us]
+    required:
+    - exposure_us
     properties:
       ros_domain_id:
         type: integer
@@ -24,55 +18,101 @@ properties:
         maximum: 232
         default: -1
         need_restart: true
-        description: ROS_DOMAIN_ID used by the camera and its consumers (-1 inherits sys.ros2_default_domain_id).
+        description: ROS_DOMAIN_ID used by the camera and its consumers (-1 inherits
+          sys.ros2_default_domain_id).
       exposure_us:
         type: integer
         minimum: 0
         maximum: 33333
         default: 5000
         need_restart: true
-        description: Fixed exposure in microseconds (0 enables Argus auto-exposure). Default 5 ms from the calibrated airborne profile.
-  preview:
+        description: Fixed exposure in microseconds (0 enables Argus auto-exposure).
+          Default 5 ms from the calibrated airborne profile.
+  stream:
     type: object
     additionalProperties: false
-    required: [enabled, fps, width, jpeg_quality, codec, h264_bitrate_kbps]
+    required:
+    - mode
+    - width
+    - fps
+    - bitrate_kbps
+    - iframe_interval
+    - config
+    - qp
+    - hw_preset
+    - profile
     properties:
-      enabled:
+      mode:
+        type: string
+        default: native_nvenc
+        need_restart: true
+        description: Select the hardware video path.
+        enum:
+        - native_nvenc
+        - isaac_ros_h264
+        - 'off'
+      publish_compressed_image:
         type: boolean
-        default: true
+        default: false
         need_restart: true
-        description: 启用按需可视化压缩旁路（发布标准 /camera/image_raw/compressed 与内置 Web 预览页；无人订阅或观看时自动退订零开销）。
-      fps:
-        type: number
-        minimum: 1
-        maximum: 30
-        default: 15.0
-        need_restart: true
-        description: 压缩流目标帧率（Hz），也可在内置 Web UI 中实时调节。
+        description: In isaac_ros_h264 mode, also publish /camera/image_compressed for legacy subscribers.
       width:
         type: integer
-        minimum: 0
-        maximum: 1280
         default: 960
         need_restart: true
-        description: 预览宽度（像素）。0 使用原生 1280×720。JPEG 使用所设宽度，H.264 最小宽度为 320 并向下对齐至偶数。原始图像始终为 1280×720。
-      jpeg_quality:
+        description: Native NVENC width. Aspect ratio is preserved.
+        enum:
+        - 640
+        - 960
+        - 1280
+      fps:
         type: integer
-        minimum: 40
-        maximum: 95
-        default: 85
+        default: 15
         need_restart: true
-        description: JPEG 编码画质（40-95），建议 80-88 兼顾清晰度与无线带宽。
-      codec:
+        description: Maximum encoder input frames per second.
+        minimum: 1
+        maximum: 30
+      bitrate_kbps:
+        type: integer
+        default: 1500
+        need_restart: true
+        description: Target bitrate in kbit/s for native NVENC or the Isaac custom preset.
+        minimum: 300
+        maximum: 8000
+      iframe_interval:
+        type: integer
+        default: 15
+        need_restart: true
+        description: Frames between keyframes (native, or Isaac custom preset).
+        minimum: 1
+        maximum: 120
+      config:
         type: string
-        enum: [auto, nvenc_h264, jpeg]
-        default: auto
+        default: custom
         need_restart: true
-        description: Web 预览编码策略（auto 自动探测 Jetson 硬件 NVENC H.264 / TurboJPEG；ROS /camera/image_raw/compressed 始终按标准 JPEG 发布以兼容 Zenoh/Foxglove/RViz）。
-      h264_bitrate_kbps:
+        description: Isaac encoder preset. Custom uses the fields below.
+        enum:
+        - custom
+        - pframe_cqp
+        - iframe_cqp
+      qp:
         type: integer
-        minimum: 500
-        maximum: 12000
-        default: 3000
+        default: 24
         need_restart: true
-        description: 启用 H.264 硬件编码时的目标码率（kbps）。
+        description: Isaac qp parameter. Isaac ROS 5.0 controls the custom preset by bitrate.
+        minimum: 0
+        maximum: 51
+      hw_preset:
+        type: integer
+        default: 0
+        need_restart: true
+        description: Isaac custom hardware preset, from 0 (ultrafast) to 3 (slow).
+        minimum: 0
+        maximum: 3
+      profile:
+        type: integer
+        default: 1
+        need_restart: true
+        description: Isaac custom H.264 profile (0 Main, 1 Baseline, 2 High).
+        minimum: 0
+        maximum: 2

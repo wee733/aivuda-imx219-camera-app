@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>isaac_ros_imx219</name>
+  <version>2.0.2</version>
+  <description>Argus GPU camera and on-demand H.264 video for Jetson.</description>
+  <maintainer email="support@aivuda.com">Aivuda</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend><depend>rclcpp_components</depend><depend>rcl_interfaces</depend>
+  <depend>camera_info_manager</depend><depend>sensor_msgs</depend>
+  <depend>cuda_buffer</depend><depend>foxglove_msgs</depend>
+</package>

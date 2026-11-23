@@ -37,19 +37,18 @@ def test_saved_domain_and_override(camera, tmp_path):
     import jsonschema
     schema = yaml.safe_load((APP / 'config/config_schema.yaml').read_text())
     cfg = defaults()
-    del cfg['camera']['ros_domain_id']
-    cfg['ros'] = {'domain_id': 17}
-    cfg['preview'].update(enabled=False, width=160)
+    cfg['stream'].update(mode='off', width=640)
     for expected in (17, 0):
+        cfg['camera']['ros_domain_id'] = expected
         jsonschema.validate(cfg, schema)
         path = write_config(tmp_path / 'config.yaml', cfg)
         domain, args = camera.prepare(path, tmp_path)
         assert domain == expected
-        assert args == ['/app/scripts/in_container.sh', '5000', '0', '/data/app_config.json']
+        assert args == ['/app/scripts/in_container.sh', 'off', '/data/app_config.json']
         settings = json.loads((tmp_path / 'app_config.json').read_text())
         assert settings['ros_domain_id'] == expected
-        assert settings['preview']['width'] == 160
-        cfg['camera']['ros_domain_id'] = 0
+        assert settings['stream']['width'] == 640
+    assert not jsonschema.Draft7Validator(schema).is_valid({**cfg, 'ros': {'domain_id': 17}})
 
 
 def test_domain_sources(camera, tmp_path, monkeypatch):
@@ -83,25 +82,51 @@ def test_invalid_inherited_value(camera, tmp_path, monkeypatch, raw):
     assert not (tmp_path / 'app_config.json').exists()
 
 
-@pytest.mark.parametrize(('exposure', 'preview', 'flag'), [(0, False, '0'), (33333, True, '1')])
-def test_explicit_settings_reach_the_driver(camera, tmp_path, monkeypatch, exposure, preview, flag):
-    # An explicit per-camera domain must not depend on a malformed service environment.
+@pytest.mark.parametrize('mode', ['off', 'isaac_ros_h264', 'native_nvenc'])
+def test_explicit_settings_reach_the_driver(camera, tmp_path, monkeypatch, mode):
     monkeypatch.setenv('ROS_DOMAIN_ID', 'invalid')
     cfg = defaults()
-    cfg['camera'].update(ros_domain_id=232, exposure_us=exposure)
-    cfg['preview']['enabled'] = preview
+    cfg['camera'].update(ros_domain_id=232, exposure_us=0)
+    cfg['stream'].update(mode=mode, fps=30, bitrate_kbps=8000, iframe_interval=1)
     domain, command = camera.prepare(write_config(tmp_path / 'camera.yaml', cfg), tmp_path)
     assert domain == 232
-    assert command == ['/app/scripts/in_container.sh', str(exposure), flag, '/data/app_config.json']
-    assert json.loads((tmp_path / 'app_config.json').read_text())['exposure_us'] == exposure
+    assert command == ['/app/scripts/in_container.sh', mode, '/data/app_config.json']
+    result = json.loads((tmp_path / 'app_config.json').read_text())
+    assert result['exposure_us'] == 0 and result['stream'] == cfg['stream']
 
 
-def test_reject_quoted_boolean(camera, tmp_path):
-    config = defaults()
-    config['preview']['enabled'] = 'false'
-    path = write_config(tmp_path / 'config.yaml', config)
-    with pytest.raises(ValueError, match='preview.enabled'):
+@pytest.mark.parametrize('compat', [None, False, True])
+def test_isaac_compressed_image_opt_in(camera, tmp_path, compat):
+    import jsonschema
+    cfg = defaults()
+    cfg['stream']['mode'] = 'isaac_ros_h264'
+    if compat is None:
+        del cfg['stream']['publish_compressed_image']
+    else:
+        cfg['stream']['publish_compressed_image'] = compat
+    jsonschema.validate(cfg, yaml.safe_load((APP / 'config/config_schema.yaml').read_text()))
+    camera.prepare(write_config(tmp_path / 'camera.yaml', cfg), tmp_path)
+    stream = json.loads((tmp_path / 'app_config.json').read_text())['stream']
+    assert stream['publish_compressed_image'] is (compat is True)
+
+
+@pytest.mark.parametrize(('key', 'value'), [('publish_compressed_image', 1),
+                         ('publish_compressed_image', 'false'), ('mode', 'jpeg'), ('fps', 31), ('fps', True),
+                         ('width', 641), ('bitrate_kbps', 299), ('iframe_interval', 0),
+                         ('config', 'unknown'), ('qp', 52), ('profile', 3), ('hw_preset', -1)])
+def test_invalid_stream(camera, tmp_path, key, value):
+    cfg = defaults()
+    cfg['stream'][key] = value
+    path = write_config(tmp_path / 'config.yaml', cfg)
+    with pytest.raises(ValueError, match='stream.' + key):
         camera.prepare(path, tmp_path)
+
+
+def test_old_preview_disabled_stays_disabled(camera, tmp_path):
+    cfg = defaults()
+    del cfg['stream']
+    cfg['preview'] = {'enabled': False}
+    assert camera.settings(write_config(tmp_path / 'camera.yaml', cfg))['stream']['mode'] == 'off'
 
 
 @pytest.mark.parametrize('script', ['start.sh', 'scripts/pre_install.sh'])
