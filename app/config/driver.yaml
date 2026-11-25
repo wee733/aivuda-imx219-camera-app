@@ -11,8 +11,8 @@
     timestamp_clock: monotonic
     qos_depth: 3
     ipc_retention_ms: 1000
-    awb_mode: indoor
-    exposure_compensation_ev: -0.7
-    color_gain_r: 1.1772151898734178
+    awb_mode: auto
+    exposure_compensation_ev: 0.0
+    color_gain_r: 1.0
     color_gain_g: 1.0
-    color_gain_b: 0.8691588785046729
+    color_gain_b: 1.0

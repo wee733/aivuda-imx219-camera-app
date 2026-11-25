@@ -316,11 +316,11 @@ public:
     if (exposure_us_ < 0 || (exposure_us_ > 0 && max_exposure_us_ > 0)) {
       throw std::invalid_argument("Use exposure_us or max_exposure_us, not both");
     }
-    awb_mode_ = parameter<std::string>("awb_mode", "indoor");
-    exposure_ev_ = parameter<double>("exposure_compensation_ev", -0.7);
-    gain_r_ = parameter<double>("color_gain_r", 1.1772151898734178);
+    awb_mode_ = parameter<std::string>("awb_mode", "auto");
+    exposure_ev_ = parameter<double>("exposure_compensation_ev", 0.0);
+    gain_r_ = parameter<double>("color_gain_r", 1.0);
     gain_g_ = parameter<double>("color_gain_g", 1.0);
-    gain_b_ = parameter<double>("color_gain_b", 0.8691588785046729);
+    gain_b_ = parameter<double>("color_gain_b", 1.0);
     if (awb_mode_ != "auto" && awb_mode_ != "indoor" && awb_mode_ != "daylight") {
       throw std::invalid_argument("awb_mode must be auto, indoor or daylight");
     }
@@ -691,7 +691,7 @@ private:
             try {
               if (!native) {
                 native = std::make_unique<NativeEncoder>(stream_width_,
-                  (stream_width_ * height_ / width_) & ~1, stream_fps_, bitrate_, interval_,
+                  (stream_width_ * height_ / width_) & ~1, stream_fps_, bitrate_, interval_, layout,
                   [this](int64_t stamp, const uint8_t * data, size_t length) {
                     Video msg;
                     msg.timestamp = rclcpp::Time(stamp, RCL_SYSTEM_TIME);

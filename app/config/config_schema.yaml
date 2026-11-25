@@ -26,7 +26,7 @@ properties:
         maximum: 33333
         default: 5000
         need_restart: true
-        description: Fixed exposure in microseconds (0 enables Argus auto-exposure).
+        description: Auto-exposure upper bound in microseconds; 0 leaves the Argus range uncapped.
           Default 5 ms from the calibrated airborne profile.
   stream:
     type: object

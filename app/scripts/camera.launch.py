@@ -23,7 +23,7 @@ def generate_launch_description():
         package='isaac_ros_imx219', plugin='imx219::Imx219Node',
         name='imx219', namespace='camera', extra_arguments=intra,
         parameters=['/app/config/driver.yaml', {
-            'exposure_us': cfg['exposure_us'], 'stream.mode': stream['mode'],
+            'exposure_us': 0, 'max_exposure_us': cfg['exposure_us'], 'stream.mode': stream['mode'],
             'stream.fps': stream['fps'],
             'stream.publish_compressed_image': stream['publish_compressed_image']}])
     encoder = ComposableNode(

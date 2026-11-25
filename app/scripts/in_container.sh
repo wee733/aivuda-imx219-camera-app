@@ -25,6 +25,6 @@ print(cfg['exposure_us'], stream['width'], stream['fps'], stream['bitrate_kbps']
 PY
 )
 exec /app/bin/imx219_node --ros-args -r __ns:=/camera --params-file /app/config/driver.yaml \
-  -p "exposure_us:=$exposure" -p "stream.mode:='$mode'" -p "stream.width:=$width" \
+  -p exposure_us:=0 -p "max_exposure_us:=$exposure" -p "stream.mode:='$mode'" -p "stream.width:=$width" \
   -p "stream.fps:=$fps" -p "stream.bitrate_kbps:=$bitrate" -p "stream.iframe_interval:=$interval" \
   --log-level serialize_buffer_with_endpoint:=warn --log-level deserialize_buffer_with_endpoint:=warn

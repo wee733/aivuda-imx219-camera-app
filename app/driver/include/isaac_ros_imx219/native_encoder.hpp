@@ -14,7 +14,7 @@ class NativeEncoder
 public:
   using Output = std::function<void(int64_t, const uint8_t *, size_t)>;
   NativeEncoder(unsigned width, unsigned height, unsigned fps, unsigned bitrate_kbps,
-    unsigned interval, Output publish);
+    unsigned interval, const Yuv420 & input, Output publish);
   ~NativeEncoder();
   void submit(const Yuv420 & frame, unsigned width, unsigned height,
     int64_t stamp, cudaStream_t stream);

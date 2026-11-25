@@ -1,6 +1,6 @@
 camera:
   ros_domain_id: -1
-  exposure_us: 5000
+  exposure_us: 5000  # AE upper bound in microseconds, not a fixed shutter
 stream:
   mode: native_nvenc
   publish_compressed_image: false

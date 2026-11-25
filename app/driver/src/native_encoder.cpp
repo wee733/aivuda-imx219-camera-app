@@ -40,12 +40,12 @@ struct InputSurface
     if (surface) {NvBufSurfaceDestroy(surface);}
   }
 
-  void allocate(unsigned width, unsigned height)
+  void allocate(unsigned width, unsigned height, NvBufSurfaceColorFormat format)
   {
     NvBufSurfaceAllocateParams args{};
     args.params.width = width;
     args.params.height = height;
-    args.params.colorFormat = NVBUF_COLOR_FORMAT_NV12;
+    args.params.colorFormat = format;
     args.params.layout = NVBUF_LAYOUT_PITCH;
     args.params.memType = NVBUF_MEM_SURFACE_ARRAY;
     args.memtag = NvBufSurfaceTag_VIDEO_ENC;
@@ -80,13 +80,19 @@ struct NativeEncoder::Impl
   std::deque<int64_t> stamps;
   Output publish;
 
-  Impl(unsigned w, unsigned h, unsigned fps, unsigned bitrate, unsigned interval, Output sink)
+  Impl(unsigned w, unsigned h, unsigned fps, unsigned bitrate, unsigned interval, const Yuv420 & input, Output sink)
   : encoder(NvVideoEncoder::createVideoEncoder("imx219-nvenc", O_NONBLOCK)),
     width(w), height(h), publish(std::move(sink))
   {
     if (!encoder) {throw std::runtime_error("Cannot open Jetson NVENC");}
     checked(encoder->setCapturePlaneFormat(V4L2_PIX_FMT_H264, w, h, 2 * 1024 * 1024), "H264 format");
-    checked(encoder->setOutputPlaneFormat(V4L2_PIX_FMT_NV12M, w, h), "NV12 format");
+    // write_nv12 preserves Argus sample values; tag the buffer and bitstream accordingly.
+    const auto cs = input.matrix == 2 ? V4L2_COLORSPACE_BT2020 :
+      (input.matrix == 1 ? V4L2_COLORSPACE_REC709 : V4L2_COLORSPACE_SMPTE170M);
+    const auto format = input.matrix == 2 ? NVBUF_COLOR_FORMAT_NV12_2020 :
+      (input.matrix == 1 ? (input.full_range ? NVBUF_COLOR_FORMAT_NV12_709_ER : NVBUF_COLOR_FORMAT_NV12_709) :
+       (input.full_range ? NVBUF_COLOR_FORMAT_NV12_ER : NVBUF_COLOR_FORMAT_NV12));
+    checked(encoder->setOutputPlaneFormat(V4L2_PIX_FMT_NV12M, w, h, cs, input.full_range), "NV12 format");
     checked(encoder->setBitrate(bitrate * 1000), "bitrate");
     checked(encoder->setProfile(V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE), "profile");
     checked(encoder->setRateControlMode(V4L2_MPEG_VIDEO_BITRATE_MODE_CBR), "rate control");
@@ -95,13 +101,17 @@ struct NativeEncoder::Impl
     checked(encoder->setFrameRate(fps, 1), "frame rate");
     checked(encoder->setNumBFrames(0), "disable B-frames");
     checked(encoder->setInsertSpsPpsAtIdrEnabled(true), "SPS/PPS");
+    checked(encoder->setInsertVuiEnabled(true), "insert color VUI");
+    if (input.full_range) {
+      checked(encoder->setExtendedColorFormat(true), "full-range video");
+    }
     checked(encoder->setHWPresetType(V4L2_ENC_HW_PRESET_ULTRAFAST), "hardware preset");
     checked(encoder->setMaxPerfMode(1), "maximum performance");
     checked(encoder->output_plane.reqbufs(V4L2_MEMORY_DMABUF, 4), "request input buffers");
     checked(encoder->capture_plane.setupPlane(V4L2_MEMORY_MMAP, 4, true, false), "map output buffers");
     for (unsigned i = 0; i < encoder->output_plane.getNumBuffers(); ++i) {
       surfaces.push_back(std::make_unique<InputSurface>());
-      surfaces.back()->allocate(w, h);
+      surfaces.back()->allocate(w, h, format);
     }
     checked(encoder->output_plane.setStreamStatus(true), "start input");
     checked(encoder->capture_plane.setStreamStatus(true), "start output");
@@ -158,8 +168,8 @@ struct NativeEncoder::Impl
 };
 
 NativeEncoder::NativeEncoder(unsigned w, unsigned h, unsigned fps, unsigned bitrate,
-  unsigned interval, Output sink)
-: impl_(std::make_unique<Impl>(w, h, fps, bitrate, interval, std::move(sink))) {}
+  unsigned interval, const Yuv420 & input, Output sink)
+: impl_(std::make_unique<Impl>(w, h, fps, bitrate, interval, input, std::move(sink))) {}
 NativeEncoder::~NativeEncoder() = default;
 void NativeEncoder::submit(const Yuv420 & frame, unsigned w, unsigned h, int64_t stamp,
   cudaStream_t stream)

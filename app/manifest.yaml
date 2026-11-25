@@ -2,7 +2,7 @@ app_id: airborne_isaac_camera
 name: IMX219 Isaac ROS Camera
 description: Publishes calibrated CUDA RGB images and on-demand hardware H.264 video
   from the IMX219 camera.
-version: 2.0.2
+version: 2.0.3
 run:
   entrypoint: ./start.sh
   args: []
